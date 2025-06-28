@@ -3,8 +3,7 @@ import requests
 import logging
 import pandas as pd
 from dotenv import load_dotenv
-from token_manager import get_valid_upstox_access_token, generate_new_upstox_token
-
+from .token_manager import get_valid_upstox_access_token, generate_new_upstox_token
 
 load_dotenv()
 

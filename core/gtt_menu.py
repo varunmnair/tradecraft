@@ -1,8 +1,8 @@
 import logging
 import pandas as pd
-from token_manager import get_kite_session
-from gtt_logic import generate_gtt_plan
-from gtt_utils import sync_gtt_orders
+from .token_manager import get_kite_session
+from .gtt_logic import generate_gtt_plan, get_cmp, trigger_price_and_adjust_order
+from .gtt_utils import sync_gtt_orders
 
 logging.basicConfig(level=logging.INFO)
 
@@ -18,8 +18,7 @@ def read_csv(file_path):
 
 def list_gtt_orders(kite, scrips):
     import math
-    from gtt_logic import get_cmp  # Ensure this is imported if not already
-
+    
     existing_orders = []
     new_orders = []
     fully_allocated_symbols = []
@@ -112,7 +111,6 @@ def analyze_gtt_orders(kite):
 
             symbol = g["condition"]["tradingsymbol"]
             trigger = g["condition"]["trigger_values"][0]
-            from gtt_logic import get_cmp
             exchange = g["condition"]["exchange"]
             ltp = get_cmp(kite, symbol, exchange)
             qty = g["orders"][0]["quantity"]
@@ -174,7 +172,7 @@ def analyze_gtt_orders(kite):
                 if order["Variance (%)"] < target_variance:
                     try:
                         new_trigger = round(order["LTP"] / (1 + target_variance / 100), 2)
-                        from gtt_logic import trigger_price_and_adjust_order
+                        
                         new_price, new_trigger = trigger_price_and_adjust_order(order_price=new_trigger, ltp=order["LTP"])
 
                         kite.delete_gtt(order["GTT ID"])
