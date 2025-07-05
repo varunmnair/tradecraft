@@ -8,8 +8,8 @@ API_KEY = "8ea96b17-be6c-42cd-b921-a1ad97b45bd0"
 API_SECRET = "n4pb284a6g"
 REDIRECT_URI = "http://localhost"
 CSV_PATH = "data/Name-symbol-mapping.csv"
-EXCHANGE_SEGMENT = "NSE_EQ"  # Use NSE_EQ for most stocks
-SYMBOL = "TATATECH"  # Enter the symbol you want CMP for
+EXCHANGE_SEGMENT = "BSE_EQ"  # Use NSE_EQ for most stocks
+SYMBOL = "539997"  # Enter the symbol you want CMP for
 # =======================================
 
 def get_instrument_key_from_csv(symbol: str, csv_path: str, exchange_segment: str = "NSE_EQ") -> str:
@@ -38,7 +38,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-UPSTOX_TOKEN_FILE = "auth/zerodha_access_token.pkl"
+UPSTOX_TOKEN_FILE = "auth/upstox_access_token.pkl"
 
 import pickle 
 import os 

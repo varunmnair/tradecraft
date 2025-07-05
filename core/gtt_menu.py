@@ -3,6 +3,7 @@ import pandas as pd
 from .token_manager import get_kite_session
 from .gtt_logic import generate_gtt_plan, get_cmp, trigger_price_and_adjust_order
 from .gtt_utils import sync_gtt_orders
+import textwrap
 
 logging.basicConfig(level=logging.INFO)
 
@@ -15,6 +16,14 @@ def read_csv(file_path):
     except Exception as e:
         logging.error(f"Failed to read CSV: {e}")
         return []
+
+def print_wrapped_section(title, symbols, width=80):
+    print(f"\n{title}")
+    if symbols:
+        wrapped = textwrap.fill(", ".join(symbols), width=width, subsequent_indent="  ")
+        print(wrapped)
+    else:
+        print("  None")
 
 def list_gtt_orders(kite, scrips):
     import math
@@ -74,10 +83,10 @@ def list_gtt_orders(kite, scrips):
             continue
 
     if existing_orders:
-        print(f"Order Exists. Orders will be skipped for symbols: {', '.join(existing_orders)}")
+        print_wrapped_section("📌 Order Exists - Skipping GTT placement for:", existing_orders)
 
     if fully_allocated_symbols:
-        print(f"All entry levels completed. Orders will be skipped for symbols: {', '.join(fully_allocated_symbols)}")
+        print_wrapped_section("📌 All Entry Levels Completed - Skipping GTT placement for:", fully_allocated_symbols)
 
     if new_orders:
         print(f"\n{'Symbol':<15} {'Order Price':<15} {'Trigger Price':<15} {'LTP':<15} {'Order Amount':<15} {'Entry Level':<15}")
@@ -91,7 +100,7 @@ def list_gtt_orders(kite, scrips):
             amount = round(price * qty, 2)
             print(f"{symbol:<15} {price:<15} {trigger:<15} {ltp:<15} {amount:<15} {entry:<15}")
 
-    if input("1.1 Place GTT orders? (y/n): ").lower() == "y":
+    if input("\n1.1 Place GTT orders? (y/n): ").lower() == "y":
         for scrip in scrips:
             gtt_plan = generate_gtt_plan(kite, scrip)
             sync_gtt_orders(kite, gtt_plan, dry_run=DRY_RUN)

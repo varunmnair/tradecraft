@@ -11,7 +11,6 @@ RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
 RAPIDAPI_HOST = os.getenv("RAPIDAPI_HOST")
 
 CSV_PATH = "data/Name-symbol-mapping.csv"
-EXCHANGE_SEGMENT = "NSE_EQ"
 
 LTP_ORDER_DIFF = 1.025
 LTP_TRIGGER_DIFF = 0.0026
@@ -51,7 +50,8 @@ def get_cmp_from_upstox(symbol, exchange):
         access_token = get_valid_upstox_access_token()
         logging.debug(f"Access token retrieved for Upstox")
 
-        instrument_key = get_instrument_key_from_csv(symbol, CSV_PATH, EXCHANGE_SEGMENT)
+        exchange_segment = exchange + "_EQ"
+        instrument_key = get_instrument_key_from_csv(symbol, CSV_PATH, exchange_segment)
         logging.debug(f"Instrument key for {symbol}: {instrument_key}")
         if not instrument_key:
             logging.error(f"Instrument key not found for {symbol}")
@@ -147,7 +147,7 @@ def generate_gtt_plan(kite, scrip):
     allocated = scrip["Allocated"]
 
     ltp = get_cmp(kite, symbol, exchange)
-    if ltp is None:
+    if ltp is None or ltp == 0:
         logging.error(f"Could not fetch CMP for {symbol}. Skipping.")
         return []
 

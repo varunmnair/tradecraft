@@ -1,7 +1,29 @@
 import logging
 
+from datetime import datetime
+import logging
+
 def sync_gtt_orders(kite, gtt_plan, dry_run=False):
-    existing_orders = kite.get_gtts()
+    # Fetch all GTTs
+    all_gtts = kite.get_gtts()
+
+    # Filter out GTTs that are triggered and not triggered today
+    today = datetime.today().date()
+    existing_orders = []
+    for g in all_gtts:
+        if g["orders"][0]["transaction_type"] != kite.TRANSACTION_TYPE_BUY:
+            continue
+        if g["status"] == "triggered":
+            triggered_at = g.get("triggered_at")
+            if triggered_at:
+                try:
+                    triggered_date = datetime.strptime(triggered_at[:10], "%Y-%m-%d").date()
+                    if triggered_date != today:
+                        continue
+                except Exception as e:
+                    logging.warning(f"Could not parse triggered_at for GTT {g['id']}: {e}")
+                    continue
+        existing_orders.append(g)
 
     for order in gtt_plan:
         symbol = order["symbol"]
@@ -12,7 +34,7 @@ def sync_gtt_orders(kite, gtt_plan, dry_run=False):
         ]
 
         if existing:
-            logging.info(f"[INFO] Skipping {symbol}, GTT already exists")
+            logging.debug(f"[INFO] Skipping {symbol}, GTT already exists")
         else:
             logging.info(f"[INFO] ✅ Placing new GTT for {symbol} @ {order['price']}")
             if not dry_run:
