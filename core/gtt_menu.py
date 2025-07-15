@@ -4,6 +4,8 @@ from .token_manager import get_kite_session
 from .gtt_logic import generate_gtt_plan, get_cmp, trigger_price_and_adjust_order
 from .gtt_utils import sync_gtt_orders
 import textwrap
+from datetime import datetime
+import os
 
 logging.basicConfig(level=logging.INFO)
 
@@ -48,9 +50,10 @@ def list_gtt_orders(kite, scrips):
     try:
         holdings = kite.holdings()
         holdings_map = {
-            h["tradingsymbol"]: h["quantity"] + h.get("t1_quantity", 0)
-            for h in holdings
+        h["tradingsymbol"].replace("#", ""): h["quantity"] + h.get("t1_quantity", 0)
+        for h in holdings
         }
+
     except Exception as e:
         logging.error(f"Error fetching holdings: {e}")
         holdings_map = {}
@@ -208,6 +211,150 @@ def analyze_gtt_orders(kite):
 
 
 
+def update_tradebook(kite, tradebook_path="data/zerodha-tradebook-master.csv"):
+    # Fetch trades from Kite
+    new_trades = kite.trades()
+
+    # Convert new trades to DataFrame
+    new_trades_df = pd.DataFrame(new_trades)
+
+    if new_trades_df.empty:
+        print("No new trades found.")
+        return
+
+    # Normalize and rename columns to match tradebook format
+    new_trades_df = new_trades_df.rename(columns={
+        "tradingsymbol": "symbol",
+        "exchange": "exchange",
+        "instrument_token": "isin",  # Placeholder, actual ISIN may not be available
+        "transaction_type": "trade_type",
+        "quantity": "quantity",
+        "average_price": "price",
+        "trade_id": "trade_id",
+        "order_id": "order_id",
+        "exchange_timestamp": "order_execution_time"
+    })
+
+    new_trades_df["isin"] = ""  # ISIN not available from kite.trades()
+    new_trades_df["segment"] = "EQ"
+    new_trades_df["series"] = new_trades_df["symbol"].apply(lambda x: "EQ")
+    new_trades_df["auction"] = False
+    new_trades_df["trade_date"] = pd.to_datetime(new_trades_df["order_execution_time"]).dt.date
+    new_trades_df["trade_date"] = new_trades_df["trade_date"].apply(lambda x: x.strftime("%#m/%#d/%Y"))
+
+
+    # Reorder columns to match the tradebook format
+    new_trades_df = new_trades_df[[
+        "symbol", "isin", "trade_date", "exchange", "segment", "series",
+        "trade_type", "auction", "quantity", "price", "trade_id", "order_id", "order_execution_time"
+    ]]
+
+    # Load existing tradebook if it exists
+    if os.path.exists(tradebook_path):
+        existing_df = pd.read_csv(tradebook_path)
+        existing_trade_ids = set(existing_df["trade_id"].astype(str))
+    else:
+        existing_df = pd.DataFrame(columns=new_trades_df.columns)
+        existing_trade_ids = set()
+
+    # Filter out trades that already exist
+    new_trades_df = new_trades_df[~new_trades_df["trade_id"].astype(str).isin(existing_trade_ids)]
+
+    if not new_trades_df.empty:
+        updated_df = pd.concat([existing_df, new_trades_df], ignore_index=True)
+        updated_df.to_csv(tradebook_path, index=False)
+        print(f"Appended {len(new_trades_df)} new trades to the tradebook.")
+    else:
+        print("No new trades to append.")
+
+
+
+def analyze_holdings(kite):
+    
+    update_tradebook(kite)
+
+    try:
+        import pandas as pd
+        from datetime import datetime
+        from .gtt_logic import get_cmp
+
+        tradebook_path = "data/zerodha-tradebook-master.csv"
+        trades_df = pd.read_csv(tradebook_path)
+        trades_df.columns = [col.strip().lower().replace(" ", "_") for col in trades_df.columns]
+        trades_df["trade_date"] = pd.to_datetime(trades_df["trade_date"], errors='coerce')
+        trades_df = trades_df[trades_df["trade_type"].str.lower() == "buy"]
+
+        holdings = kite.holdings()
+        results = []
+
+        for holding in holdings:
+            symbol = holding["tradingsymbol"]
+            symbol_clean = symbol.replace("#", "").upper()
+            quantity = holding["quantity"] + holding.get("t1_quantity", 0)
+            avg_price = holding["average_price"]
+            invested = quantity * avg_price
+
+            ltp = holding["last_price"]
+            if not ltp:
+                ltp = get_cmp(kite, symbol, holding.get("exchange", "NSE"))
+            if not ltp:
+                continue
+
+            current_value = quantity * ltp
+            pnl = current_value - invested
+            pnl_pct = (pnl / invested * 100) if invested else 0
+            roi = pnl_pct
+
+            symbol_trades = trades_df[trades_df["symbol"].str.upper() == symbol_clean]
+            symbol_trades = symbol_trades.sort_values(by="trade_date", ascending=False)
+
+            qty_needed = quantity
+            weighted_sum = 0
+            total_qty = 0
+
+            for _, trade in symbol_trades.iterrows():
+                if qty_needed <= 0:
+                    break
+                trade_qty = trade["quantity"]
+                trade_date = trade["trade_date"].date()
+                used_qty = min(qty_needed, trade_qty)
+                weighted_sum += used_qty * trade_date.toordinal()
+                total_qty += used_qty
+                qty_needed -= used_qty
+
+            if total_qty > 0:
+                avg_date_ordinal = weighted_sum / total_qty
+                avg_date = datetime.fromordinal(int(avg_date_ordinal)).date()
+                days_held = (datetime.today().date() - avg_date).days
+            else:
+                days_held = 0
+
+            yld_per_day = (pnl / days_held) if days_held > 0 else 0
+            roi_per_day = (roi / days_held) if days_held > 0 else 0
+
+            results.append({
+                "Symbol": symbol,
+                "Invested": invested,
+                "P&L": pnl,
+                "Yld/Day": yld_per_day,
+                "ROI": roi,
+                "Days Held (Age)": days_held,
+                "P&L%": pnl_pct,
+                "ROI/Day": roi_per_day
+            })
+
+        sorted_results = sorted(results, key=lambda x: x["ROI/Day"], reverse=True)
+
+        print(f"{'Symbol':<15} {'Invested':>10} {'P&L':>10} {'Yld/Day':>10} {'Age':>5} {'P&L%':>8} {'ROI/Day':>10}")
+        print("-" * 90)
+        for r in sorted_results:
+            print(f"{r['Symbol']:<15} {r['Invested']:>10.2f} {r['P&L']:>10.2f} {r['Yld/Day']:>10.2f} {r['Days Held (Age)']:>5} {r['P&L%']:>8.2f} {r['ROI/Day']:>10.2f}")
+
+    except Exception as e:
+        print(f"An error occurred while analyzing holdings: {e}")
+
+
+
 def main():
     kite = get_kite_session()
     scrips = read_csv(CSV_FILE_PATH)
@@ -216,7 +363,8 @@ def main():
         print("\nMenu:")
         print("1. List GTT orders")
         print("2. Analyze GTT orders")
-        print("3. Exit")
+        print("3. Analyze Holdings")
+        print("4. Exit")
         choice = input("Enter your choice: ")
 
         if choice == "1":
@@ -224,6 +372,8 @@ def main():
         elif choice == "2":
             analyze_gtt_orders(kite)
         elif choice == "3":
+            analyze_holdings(kite)
+        elif choice == "4":
             print("Exiting...")
             break
         else:

@@ -71,6 +71,29 @@ try:
     actual_key = list(ltp_data["data"].keys())[0]
     cmp = ltp_data["data"][actual_key]["last_price"]
     print(f"\n📈 CMP for {SYMBOL} ({actual_key}): ₹{cmp}")
+    
 except Exception as e:
     print(f"\n❌ Could not extract CMP. Full response: {e}")
     print(ltp_data)
+
+
+from kiteconnect import KiteConnect
+
+# Initialize KiteConnect with your API key
+kite = KiteConnect(api_key="your_api_key")
+
+# Generate session using request token and your API secret
+data = kite.generate_session("your_request_token", api_secret="your_api_secret")
+kite.set_access_token(data["access_token"])
+
+# Fetch trade history
+trades = kite.trades()
+
+# Filter trades for a specific symbol
+symbol = "RELIANCE"
+symbol_trades = [trade for trade in trades if trade['tradingsymbol'] == symbol]
+
+# Print trade history for the symbol
+for trade in symbol_trades:
+    print(trade)
+

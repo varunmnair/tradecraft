@@ -26,24 +26,28 @@ def get_cmp(kite, symbol, exchange):
     # Try from holdings
     try:
         for holding in kite.holdings():
-            if holding["tradingsymbol"] == symbol and holding["exchange"] == exchange:
+            holding_symbol = holding["tradingsymbol"].replace("#", "")  # Normalize holding symbol
+            if holding_symbol == symbol and holding["exchange"] == exchange:
                 cmp = float(holding["last_price"])
-                cmp_cache[key] = cmp
-                return cmp
+                if cmp > 0:
+                    cmp_cache[key] = cmp
+                    return cmp
+                else:
+                    logging.debug(f"Zerodha LTP for {symbol} is 0, falling back to Upstox")
     except Exception as e:
         logging.warning(f"Holdings fetch failed for {symbol}: {e}")
 
     # Fallback to Upstox
     try:
         cmp = get_cmp_from_upstox(symbol, exchange)
-        if cmp:
+        if cmp and cmp > 0:
             cmp_cache[key] = cmp
-        return cmp
+            return cmp
+        else:
+            raise ValueError(f"Invalid CMP fetched for {symbol}: {cmp}")
     except Exception as e:
         logging.error(f"Failed to fetch CMP from Upstox for {symbol}: {e}")
-        return None
-
-
+        raise
 
 def get_cmp_from_upstox(symbol, exchange):
     try:
@@ -170,7 +174,8 @@ def generate_gtt_plan(kite, scrip):
     holdings = kite.holdings()
     total_qty = 0
     for holding in holdings:
-        if holding["tradingsymbol"] == symbol:
+        holding_symbol = holding["tradingsymbol"].replace("#", "")  # Normalize holding symbol
+        if holding_symbol == symbol:
             holding_qty = holding["quantity"]
             t1_qty = holding.get("t1_quantity", 0)
             total_qty = holding_qty + t1_qty
