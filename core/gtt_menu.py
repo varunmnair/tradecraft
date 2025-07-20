@@ -6,6 +6,7 @@ from .gtt_utils import sync_gtt_orders
 import textwrap
 from datetime import datetime
 import os
+from collections import Counter
 
 logging.basicConfig(level=logging.INFO)
 
@@ -18,6 +19,18 @@ def read_csv(file_path):
     except Exception as e:
         logging.error(f"Failed to read CSV: {e}")
         return []
+
+
+def detect_duplicate_symbols(scrips):
+    symbol_counts = Counter(s['symbol'] for s in scrips)
+    duplicates = [symbol for symbol, count in symbol_counts.items() if count > 1]
+    if duplicates:
+        print("\n⚠️ Duplicate entries found in entry_levels.csv for the following symbols:")
+        for symbol in duplicates:
+            print(f"  - {symbol}")
+    else:
+        print("\n✅ No duplicate entries found in entry_levels.csv.")
+
 
 def print_wrapped_section(title, symbols, width=80):
     print(f"\n{title}")
@@ -90,6 +103,7 @@ def list_gtt_orders(kite, scrips):
 
     if fully_allocated_symbols:
         print_wrapped_section("📌 All Entry Levels Completed - Skipping GTT placement for:", fully_allocated_symbols)
+
 
     if new_orders:
         print(f"\n{'Symbol':<15} {'Order Price':<15} {'Trigger Price':<15} {'LTP':<15} {'Order Amount':<15} {'Entry Level':<15}")
@@ -268,6 +282,54 @@ def update_tradebook(kite, tradebook_path="data/zerodha-tradebook-master.csv"):
         print("No new trades to append.")
 
 
+def write_roi_results(results, output_path="data/roi-master.csv"):
+    # Ensure the output directory exists
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    # Get today's date and check if it's Saturday or Sunday
+    today = datetime.today()
+    if today.weekday() in (5, 6):  # 5 = Saturday, 6 = Sunday
+        print("\nToday is Saturday or Sunday. Skipping write to ROI master.")
+        return
+
+    today_str = today.strftime("%Y-%m-%d")
+
+    # Create a DataFrame from the results
+    df_new = pd.DataFrame(results)
+    df_new["Date"] = today_str
+
+    # Rename columns to match the required output format
+    df_new = df_new.rename(columns={
+        "Symbol": "Symbol",
+        "Invested": "Invested Amount",
+        "P&L": "Absolute Profit",
+        "Yld/Day": "Yield Per Day",
+        "Days Held (Age)": "Age of Stock",
+        "P&L%": "Profit Percentage",
+        "ROI/Day": "ROI per day"
+    })
+
+    # Reorder columns
+    df_new = df_new[[
+        "Date", "Symbol", "Invested Amount", "Absolute Profit",
+        "Yield Per Day", "Age of Stock", "Profit Percentage", "ROI per day"
+    ]]
+
+    # Load existing file if it exists
+    if os.path.exists(output_path):
+        df_existing = pd.read_csv(output_path)
+    else:
+        df_existing = pd.DataFrame(columns=df_new.columns)
+
+    # Combine and drop duplicates based on Date and Symbol
+    df_combined = pd.concat([df_existing, df_new], ignore_index=True)
+    df_combined.drop_duplicates(subset=["Date", "Symbol"], keep="last", inplace=True)
+
+    # Save the updated file
+    df_combined.to_csv(output_path, index=False)
+
+    print(f"ROI results written to {output_path}")
+
 
 def analyze_holdings(kite):
     
@@ -286,6 +348,7 @@ def analyze_holdings(kite):
 
         holdings = kite.holdings()
         results = []
+
 
         for holding in holdings:
             symbol = holding["tradingsymbol"]
@@ -332,6 +395,13 @@ def analyze_holdings(kite):
             yld_per_day = (pnl / days_held) if days_held > 0 else 0
             roi_per_day = (roi / days_held) if days_held > 0 else 0
 
+            # Get trend for this symbol
+            trend_result = analyze_symbol_trend(symbol)
+            if trend_result:
+                trend_str = f"{trend_result[0]}({trend_result[1]})"
+            else:
+                trend_str = "-"
+
             results.append({
                 "Symbol": symbol,
                 "Invested": invested,
@@ -340,19 +410,145 @@ def analyze_holdings(kite):
                 "ROI": roi,
                 "Days Held (Age)": days_held,
                 "P&L%": pnl_pct,
-                "ROI/Day": roi_per_day
+                "ROI/Day": roi_per_day,
+                "Trend": trend_str
             })
+
 
         sorted_results = sorted(results, key=lambda x: x["ROI/Day"], reverse=True)
 
-        print(f"{'Symbol':<15} {'Invested':>10} {'P&L':>10} {'Yld/Day':>10} {'Age':>5} {'P&L%':>8} {'ROI/Day':>10}")
-        print("-" * 90)
+        print(f"{'Symbol':<15} {'Invested':>10} {'P&L':>10} {'Yld/Day':>10} {'Age':>5} {'P&L%':>8} {'ROI/Day':>10} {'Trend':>10}")
+        print("-" * 105)
         for r in sorted_results:
-            print(f"{r['Symbol']:<15} {r['Invested']:>10.2f} {r['P&L']:>10.2f} {r['Yld/Day']:>10.2f} {r['Days Held (Age)']:>5} {r['P&L%']:>8.2f} {r['ROI/Day']:>10.2f}")
+            print(f"{r['Symbol']:<15} {r['Invested']:>10.2f} {r['P&L']:>10.2f} {r['Yld/Day']:>10.2f} {r['Days Held (Age)']:>5} {r['P&L%']:>8.2f} {r['ROI/Day']:>10.2f} {r['Trend']:>10}")
 
     except Exception as e:
         print(f"An error occurred while analyzing holdings: {e}")
 
+
+    write_roi_results(results)
+
+    # Show trend of average ROI per day for the latest 5 dates
+    try:
+        roi_path = "data/roi-master.csv"
+        if os.path.exists(roi_path):
+            df = pd.read_csv(roi_path)
+            df["Date"] = pd.to_datetime(df["Date"])
+            # Only consider symbols in current holdings
+            holding_symbols = set(h["tradingsymbol"].replace("#", "").upper() for h in holdings)
+            df = df[df["Symbol"].str.upper().isin(holding_symbols)]
+            # Group by date, get average ROI per day
+            grouped = df.groupby("Date")["ROI per day"].mean().sort_index(ascending=False)
+            latest_5 = grouped.head(5)[::-1]  # reverse to chronological order
+            trend_str = " -> ".join(f"{v:.4f}" for v in latest_5)
+            print(f"\nAverage ROI/Day trend (latest 5 dates): {trend_str}")
+    except Exception as e:
+        print(f"Error showing average ROI/Day trend: {e}")
+
+def analyze_roi_trend(file_path="data/roi-master.csv", N=3):
+    try:
+        df = pd.read_csv(file_path)
+        df["Date"] = pd.to_datetime(df["Date"])
+        df.sort_values(by=["Symbol", "Date"], inplace=True)
+
+        N = int(input("Enter the number of consecutive days for uptrend (N): "))
+
+        direction = input("Choose trend direction:\n1. View upward trend\n2. View downward trend\nEnter 1 or 2: ").strip()
+        if direction not in {"1", "2"}:
+            print("Invalid choice. Please enter 1 or 2.")
+            return
+
+        # Get current holdings symbols
+        try:
+            from .token_manager import get_kite_session
+            kite = get_kite_session()
+            holdings = kite.holdings()
+            holding_symbols = set(h["tradingsymbol"].replace("#", "").upper() for h in holdings)
+        except Exception as e:
+            print(f"Error fetching holdings for ROI filter: {e}")
+            holding_symbols = set()
+
+        results = []
+
+        for symbol, group in df.groupby("Symbol"):
+            if symbol.upper() not in holding_symbols:
+                continue
+            group = group.sort_values("Date", ascending=False)
+            roi_series = group["ROI per day"].values[:N]
+
+            if len(roi_series) < N:
+                continue
+
+            window = roi_series[::-1]  # reverse to maintain chronological order
+
+            if direction == "1" and all(x < y for x, y in zip(window, window[1:])):
+                change = max(window) - min(window)
+                trend_str = " -> ".join(f"{roi:.3f}" for roi in window)
+                results.append({
+                    "Symbol": symbol,
+                    "Change": change,
+                    "Trend": trend_str
+                })
+            elif direction == "2" and all(x > y for x, y in zip(window, window[1:])):
+                change = max(window) - min(window)
+                trend_str = " -> ".join(f"{roi:.3f}" for roi in window)
+                results.append({
+                    "Symbol": symbol,
+                    "Change": change,
+                    "Trend": trend_str
+                })
+
+        sorted_results = sorted(results, key=lambda x: x["Change"], reverse=True)
+
+        print(f"\n{'Symbol':<15} {'Change':>10} {'Trend':>30}")
+        print("-" * 60)
+        for r in sorted_results:
+            print(f"{r['Symbol']:<15} {r['Change']:>10.4f} {r['Trend']:>30}")
+
+    except Exception as e:
+        print(f"Error analyzing ROI trend: {e}")
+
+
+def analyze_symbol_trend(symbol, file_path="data/roi-master.csv"):
+    """
+    Analyze the trend (uptrend or downtrend) for a given symbol in roi-master.csv.
+    Returns ("UP", n) or ("DOWN", n) where n is the number of days the trend has continued.
+    """
+    import pandas as pd
+
+    try:
+        df = pd.read_csv(file_path)
+        df = df[df["Symbol"].str.upper() == symbol.upper()]
+        if df.empty or len(df) < 2:
+            print("Not enough data for symbol:", symbol)
+            return None
+
+        df["Date"] = pd.to_datetime(df["Date"])
+        df = df.sort_values("Date", ascending=False)
+        roi_series = df["ROI per day"].values
+
+        if roi_series[0] > roi_series[1]:
+            trend = "UP"
+        elif roi_series[0] < roi_series[1]:
+            trend = "DOWN"
+        else:
+            print("No clear trend for the latest two days.")
+            return None
+
+        count = 1
+        for i in range(1, len(roi_series)):
+            if trend == "UP" and roi_series[i-1] > roi_series[i]:
+                count += 1
+            elif trend == "DOWN" and roi_series[i-1] < roi_series[i]:
+                count += 1
+            else:
+                break
+
+        return trend, count
+
+    except Exception as e:
+        print(f"Error analyzing symbol trend: {e}")
+        return None
 
 
 def main():
@@ -364,20 +560,24 @@ def main():
         print("1. List GTT orders")
         print("2. Analyze GTT orders")
         print("3. Analyze Holdings")
-        print("4. Exit")
+        print("4. Analyze ROI")
+        print("5. Exit")
         choice = input("Enter your choice: ")
 
         if choice == "1":
+            detect_duplicate_symbols(scrips)
             list_gtt_orders(kite, scrips)
         elif choice == "2":
             analyze_gtt_orders(kite)
         elif choice == "3":
             analyze_holdings(kite)
         elif choice == "4":
+            analyze_roi_trend()
+        elif choice == "5":
             print("Exiting...")
             break
         else:
-            print("Invalid choice. Try again.")
+            print("Invalid choice. Please try again.")
 
 if __name__ == "__main__":
     main()
