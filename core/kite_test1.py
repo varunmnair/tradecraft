@@ -1,19 +1,26 @@
-from token_manager import get_kite_session
-
-
+import requests
+from token_manager import get_valid_upstox_access_token
 
 def main():
-    kite = get_kite_session()
-    orders = kite.orders()
-    symbol = "HGIINFRA"
-    past_orders = [order for order in orders if order['tradingsymbol'] == symbol and order['status'] == 'COMPLETE']
+    access_token = get_valid_upstox_access_token()
 
-    for order in past_orders:
-        print(f"Order ID: {order['order_id']}, Qty: {order['quantity']}, Price: ₹{order['average_price']}, Date: {order['order_timestamp']}")
+    # Define the endpoint for bulk quotes
+    url = 'https://api.upstox.com/v2/market-quote/quotes?instrument_key=NSE_EQ%7CINE848E01016,NSE_EQ|INE669E01016'
 
-    trades = kite.trades()
+    # Define the headers including the access token
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json"
+    }
 
-    print(trades)
+    # Make the GET request to the API
+    response = requests.get(url, headers=headers)
 
+    # Print the response
+    print("Status Code:", response.status_code)
+    print("Response JSON:", response.json())
 
 main()
+
+
+

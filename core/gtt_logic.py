@@ -142,7 +142,8 @@ def trigger_price_and_adjust_order(order_price, ltp):
             return order_price, trigger
 
 
-def generate_gtt_plan(kite, scrip):
+def generate_gtt_plan(kite, scrip, cmp_manager):
+
     symbol = scrip["symbol"]
     exchange = scrip["exchange"]
     entry1 = scrip.get("entry1")
@@ -150,7 +151,8 @@ def generate_gtt_plan(kite, scrip):
     entry3 = scrip.get("entry3")
     allocated = scrip["Allocated"]
 
-    ltp = get_cmp(kite, symbol, exchange)
+    ltp = cmp_manager.get_cmp(exchange, symbol) 
+
     if ltp is None or ltp == 0:
         logging.error(f"Could not fetch CMP for {symbol}. Skipping.")
         return []

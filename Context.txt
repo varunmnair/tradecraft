@@ -1,0 +1,75 @@
+This module is designed to automate and manage Good Till Triggered (GTT) orders for swing trading using the Zerodha Kite API, with fallback support for Upstox. It includes token management, order planning, placement, analysis, and ROI tracking.
+
+📁 Module Breakdown
+1. token_manager 
+Purpose: Manages authentication tokens for Zerodha (Kite) and Upstox APIs.
+
+Key Features:
+
+Loads API keys from .env.
+Handles token persistence using pickle.
+Automatically refreshes expired tokens.
+Provides session objects for Kite and Upstox.
+Functions:
+
+get_kite_session(): Returns a valid Kite session.
+get_valid_kite_access_token(): Validates or regenerates Kite token.
+generate_new_kite_token(): Guides user through manual login to generate a new token.
+Similar functions exist for Upstox.
+2. gtt_logic 12
+Purpose: Core logic for generating GTT order plans based on entry levels and current market price.
+
+Key Features:
+
+Calculates trigger price and limit price based on LTP and entry levels.
+Fetches CMP from Kite holdings or Upstox fallback.
+Splits allocated capital across multiple entry levels.
+Adjusts order quantities based on current holdings.
+Functions:
+
+get_cmp(): Fetches current market price.
+generate_gtt_plan(): Builds a GTT order plan for a given scrip.
+trigger_price_and_adjust_order(): Ensures trigger price is valid relative to LTP.
+get_cmp_from_upstox(): Fallback CMP fetch using Upstox API.
+3. gtt_utils 
+Purpose: Synchronizes GTT orders with Zerodha based on the generated plan.
+
+Key Features:
+
+Avoids duplicate GTTs by checking existing orders.
+Places new GTTs only if not already triggered today.
+Supports dry-run mode for testing.
+Function:
+
+sync_gtt_orders(kite, gtt_plan, dry_run=False): Main function to place GTTs.
+4. gtt_menu 
+Purpose: CLI-based menu interface for interacting with the GTT system.
+
+Key Features:
+
+Reads entry levels from CSV.
+Lists, analyzes, and places GTT orders.
+Analyzes holdings and calculates ROI.
+Detects duplicate entries and GTTs.
+Allows deletion or adjustment of GTTs based on variance.
+Tracks ROI trends and writes to a master CSV.
+Menu Options:
+
+List GTT orders
+Analyze GTT orders
+Analyze Holdings
+Analyze ROI
+Exit
+Notable Functions:
+
+list_gtt_orders(): Displays new and existing GTTs.
+analyze_gtt_orders(): Shows variance and allows cleanup.
+analyze_holdings(): Computes ROI, yield/day, and trend.
+analyze_roi_trend(): Detects up/down trends over N days.
+write_roi_results(): Appends ROI data to a master file.
+🧩 How It All Fits Together
+Token Management: Ensures valid sessions for Kite and Upstox.
+Order Planning: Uses entry levels and CMP to generate GTT plans.
+Order Execution: Places GTTs if not already present or triggered.
+Analysis Tools: Evaluate performance, ROI, and trend detection.
+CLI Interface: Provides a user-friendly way to interact with the system.

@@ -1,12 +1,14 @@
 import logging
 import pandas as pd
 from .token_manager import get_kite_session
-from .gtt_logic import generate_gtt_plan, get_cmp, trigger_price_and_adjust_order
+from .gtt_logic import generate_gtt_plan,  trigger_price_and_adjust_order
 from .gtt_utils import sync_gtt_orders
 import textwrap
 from datetime import datetime
 import os
 from collections import Counter
+from .cmp_cache import CMPManager
+
 
 logging.basicConfig(level=logging.INFO)
 
@@ -40,7 +42,7 @@ def print_wrapped_section(title, symbols, width=80):
     else:
         print("  None")
 
-def list_gtt_orders(kite, scrips):
+def list_gtt_orders(kite, scrips, cmp_manager):
     import math
     
     existing_orders = []
@@ -77,7 +79,7 @@ def list_gtt_orders(kite, scrips):
         allocated = scrip["Allocated"]
 
         try:
-            ltp = get_cmp(kite, symbol, exchange)
+            ltp = cmp_manager.get_cmp(exchange, symbol)
             if not ltp:
                 continue
             
@@ -88,7 +90,8 @@ def list_gtt_orders(kite, scrips):
                 fully_allocated_symbols.append(symbol)
                 continue
 
-            gtt_plan = generate_gtt_plan(kite, scrip)
+            gtt_plan = gtt_plan = generate_gtt_plan(kite, scrip, cmp_manager)
+
             if symbol in existing_symbols:
                 existing_orders.append(symbol)
             else:
@@ -119,11 +122,11 @@ def list_gtt_orders(kite, scrips):
 
     if input("\n1.1 Place GTT orders? (y/n): ").lower() == "y":
         for scrip in scrips:
-            gtt_plan = generate_gtt_plan(kite, scrip)
+            gtt_plan = gtt_plan = generate_gtt_plan(kite, scrip, cmp_manager)
             sync_gtt_orders(kite, gtt_plan, dry_run=DRY_RUN)
 
 
-def analyze_gtt_orders(kite):
+def analyze_gtt_orders(kite, cmp_manager):
     try:
         gtts = kite.get_gtts()
         orders = []
@@ -138,7 +141,7 @@ def analyze_gtt_orders(kite):
             symbol = g["condition"]["tradingsymbol"]
             trigger = g["condition"]["trigger_values"][0]
             exchange = g["condition"]["exchange"]
-            ltp = get_cmp(kite, symbol, exchange)
+            ltp = cmp_manager.get_cmp(exchange, symbol)
             qty = g["orders"][0]["quantity"]
             price = g["orders"][0]["price"]
             gtt_id = g["id"]
@@ -331,14 +334,14 @@ def write_roi_results(results, output_path="data/roi-master.csv"):
     print(f"ROI results written to {output_path}")
 
 
-def analyze_holdings(kite):
+def analyze_holdings(kite, cmp_manager):
     
     update_tradebook(kite)
 
     try:
         import pandas as pd
         from datetime import datetime
-        from .gtt_logic import get_cmp
+
 
         tradebook_path = "data/zerodha-tradebook-master.csv"
         trades_df = pd.read_csv(tradebook_path)
@@ -359,7 +362,7 @@ def analyze_holdings(kite):
 
             ltp = holding["last_price"]
             if not ltp:
-                ltp = get_cmp(kite, symbol, holding.get("exchange", "NSE"))
+                ltp = cmp_manager.get_cmp(holding.get("exchange", "NSE"), symbol)
             if not ltp:
                 continue
 
@@ -433,7 +436,7 @@ def analyze_holdings(kite):
         roi_path = "data/roi-master.csv"
         if os.path.exists(roi_path):
             df = pd.read_csv(roi_path)
-            df["Date"] = pd.to_datetime(df["Date"])
+            df["Date"] = pd.to_datetime(df["Date"], errors='coerce')
             # Only consider symbols in current holdings
             holding_symbols = set(h["tradingsymbol"].replace("#", "").upper() for h in holdings)
             df = df[df["Symbol"].str.upper().isin(holding_symbols)]
@@ -448,7 +451,7 @@ def analyze_holdings(kite):
 def analyze_roi_trend(file_path="data/roi-master.csv", N=3):
     try:
         df = pd.read_csv(file_path)
-        df["Date"] = pd.to_datetime(df["Date"])
+        df["Date"] = pd.to_datetime(df["Date"], errors='coerce')
         df.sort_values(by=["Symbol", "Date"], inplace=True)
 
         N = int(input("Enter the number of consecutive days for uptrend (N): "))
@@ -473,16 +476,17 @@ def analyze_roi_trend(file_path="data/roi-master.csv", N=3):
         for symbol, group in df.groupby("Symbol"):
             if symbol.upper() not in holding_symbols:
                 continue
-            group = group.sort_values("Date", ascending=False)
-            roi_series = group["ROI per day"].values[:N]
+            # Sort by ascending date (oldest to latest)
+            group = group.sort_values("Date", ascending=True)
+            roi_series = group["ROI per day"].values[-N:]  # last N days, oldest to latest
 
             if len(roi_series) < N:
                 continue
 
-            window = roi_series[::-1]  # reverse to maintain chronological order
+            window = roi_series  # oldest to latest
 
             if direction == "1" and all(x < y for x, y in zip(window, window[1:])):
-                change = max(window) - min(window)
+                change = window[-1] - window[0]
                 trend_str = " -> ".join(f"{roi:.3f}" for roi in window)
                 results.append({
                     "Symbol": symbol,
@@ -490,7 +494,7 @@ def analyze_roi_trend(file_path="data/roi-master.csv", N=3):
                     "Trend": trend_str
                 })
             elif direction == "2" and all(x > y for x, y in zip(window, window[1:])):
-                change = max(window) - min(window)
+                change = window[0] - window[-1]
                 trend_str = " -> ".join(f"{roi:.3f}" for roi in window)
                 results.append({
                     "Symbol": symbol,
@@ -509,40 +513,44 @@ def analyze_roi_trend(file_path="data/roi-master.csv", N=3):
         print(f"Error analyzing ROI trend: {e}")
 
 
-def analyze_symbol_trend(symbol, file_path="data/roi-master.csv"):
+import pandas as pd
+
+def analyze_symbol_trend(symbol, file_path="data/roi-master.csv", threshold=0.002):
     """
     Analyze the trend (uptrend or downtrend) for a given symbol in roi-master.csv.
     Returns ("UP", n) or ("DOWN", n) where n is the number of days the trend has continued.
+    Small fluctuations within the threshold are ignored.
     """
-    import pandas as pd
-
     try:
         df = pd.read_csv(file_path)
         df = df[df["Symbol"].str.upper() == symbol.upper()]
         if df.empty or len(df) < 2:
-            print("Not enough data for symbol:", symbol)
             return None
 
-        df["Date"] = pd.to_datetime(df["Date"])
-        df = df.sort_values("Date", ascending=False)
+        df["Date"] = pd.to_datetime(df["Date"], errors='coerce')
+        df = df.sort_values("Date", ascending=True)
         roi_series = df["ROI per day"].values
 
-        if roi_series[0] > roi_series[1]:
-            trend = "UP"
-        elif roi_series[0] < roi_series[1]:
-            trend = "DOWN"
-        else:
-            print("No clear trend for the latest two days.")
-            return None
-
+        trend = None
         count = 1
-        for i in range(1, len(roi_series)):
-            if trend == "UP" and roi_series[i-1] > roi_series[i]:
-                count += 1
-            elif trend == "DOWN" and roi_series[i-1] < roi_series[i]:
-                count += 1
+
+        for i in range(len(roi_series) - 1, 0, -1):
+            today = roi_series[i]
+            prev = roi_series[i - 1]
+            diff = today - prev
+
+            if trend is None:
+                if abs(diff) <= threshold:
+                    return "FLAT",1
+                trend = "UP" if diff > 0 else "DOWN"
+                count = 1
             else:
-                break
+                if trend == "UP" and diff > threshold:
+                    count += 1
+                elif trend == "DOWN" and diff < -threshold:
+                    count += 1
+                else:
+                    break
 
         return trend, count
 
@@ -551,9 +559,27 @@ def analyze_symbol_trend(symbol, file_path="data/roi-master.csv"):
         return None
 
 
+
 def main():
     kite = get_kite_session()
     scrips = read_csv(CSV_FILE_PATH)
+
+    try:
+        holdings = kite.holdings()
+    except Exception as e:
+        logging.error(f"Error fetching holdings: {e}")
+        holdings = []
+
+    try:
+        gtts = kite.get_gtts()
+    except Exception as e:
+        logging.error(f"Error fetching GTTs: {e}")
+        gtts = []
+
+    # Initialize CMPManager and refresh cache
+    cmp_manager = CMPManager(csv_path="data/Name-symbol-mapping.csv")
+    cmp_manager.refresh_cache(holdings, gtts, scrips)
+    #cmp_manager.print_all_cmps()
 
     while True:
         print("\nMenu:")
@@ -566,11 +592,11 @@ def main():
 
         if choice == "1":
             detect_duplicate_symbols(scrips)
-            list_gtt_orders(kite, scrips)
+            list_gtt_orders(kite, scrips, cmp_manager)
         elif choice == "2":
-            analyze_gtt_orders(kite)
+            analyze_gtt_orders(kite, cmp_manager)
         elif choice == "3":
-            analyze_holdings(kite)
+            analyze_holdings(kite, cmp_manager)
         elif choice == "4":
             analyze_roi_trend()
         elif choice == "5":
@@ -578,6 +604,7 @@ def main():
             break
         else:
             print("Invalid choice. Please try again.")
+
 
 if __name__ == "__main__":
     main()
